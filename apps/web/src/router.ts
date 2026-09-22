@@ -12,6 +12,7 @@ const router = createRouter({
     { path: "/materials/:id/edit", component: () => import("@/pages/MaterialFormPage.vue") },
     { path: "/materials/:id", component: () => import("@/pages/MaterialDetailPage.vue") },
     { path: "/batches", component: () => import("@/pages/BatchesPage.vue") },
+    { path: "/risk-plans", component: () => import("@/pages/RiskPlansPage.vue") },
     { path: "/batches/new", component: () => import("@/pages/BatchFormPage.vue") },
     { path: "/batches/:id", component: () => import("@/pages/BatchDetailPage.vue") },
     { path: "/sources", component: () => import("@/pages/SourcesPage.vue") },

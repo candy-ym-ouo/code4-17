@@ -22,6 +22,7 @@ const form = reactive({
   locationId: "",
   receivedAt: localDateValue(),
   expiryAt: "",
+  openedAt: "",
   initialQuantity: "",
   entryUnit: "g",
   totalCost: "",
@@ -62,6 +63,14 @@ async function submit() {
     ElMessage.error("请选择材料并填写大于 0 的入库数量");
     return;
   }
+  if (form.openedAt && form.openedAt < form.receivedAt) {
+    ElMessage.error("开封日不能早于入库日期");
+    return;
+  }
+  if (form.openedAt && form.expiryAt && form.openedAt > form.expiryAt) {
+    ElMessage.error("开封日不能晚于有效期");
+    return;
+  }
   saving.value = true;
   try {
     const response = await request<{ data: { id: string } }>("/batches", {
@@ -74,6 +83,7 @@ async function submit() {
         sourceNote: form.sourceNote || null,
         locationId: form.locationId || null,
         expiryAt: form.expiryAt || null,
+        openedAt: form.openedAt || null,
         totalCost: form.totalCost || null,
         initialColorName: form.initialColorName || null,
         initialColorHex: form.initialColorHex || null,
@@ -111,6 +121,10 @@ onMounted(loadOptions);
           </el-form-item>
           <el-form-item label="入库日期" required><el-date-picker v-model="form.receivedAt" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item>
           <el-form-item label="有效期"><el-date-picker v-model="form.expiryAt" type="date" value-format="YYYY-MM-DD" clearable style="width:100%" /></el-form-item>
+          <el-form-item label="开封日">
+            <el-date-picker v-model="form.openedAt" type="date" value-format="YYYY-MM-DD" clearable style="width:100%" />
+            <div class="muted" v-if="selectedMaterial?.openShelfLifeDays">该材料开封后建议 {{ selectedMaterial.openShelfLifeDays }} 天内用完</div>
+          </el-form-item>
           <el-form-item label="入库数量" required><el-input v-model="form.initialQuantity" placeholder="例如 1.5" /></el-form-item>
           <el-form-item label="输入单位" required><el-select v-model="form.entryUnit" style="width:100%"><el-option v-for="unit in ['g','kg','ml','l','mm','cm','m','m2','pcs']" :key="unit" :value="unit" :label="unit" /></el-select><div class="muted" v-if="selectedMaterial">将换算为 {{ selectedMaterial.stockUnit }} 入账</div></el-form-item>
           <el-form-item label="总成本"><el-input v-model="form.totalCost" placeholder="可选十进制金额" /></el-form-item>

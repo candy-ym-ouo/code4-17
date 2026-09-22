@@ -5,8 +5,9 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { request, ApiError } from "@/lib/api";
 import { movementLabels, statusLabels, type Project } from "@/types";
 import { createIdempotencyKey } from "@/lib/idempotency";
-import { localDateTimeValue } from "@/lib/dates";
+import { localDateValue, localDateTimeValue } from "@/lib/dates";
 import AttachmentPanel from "@/components/AttachmentPanel.vue";
+import RiskPlannerPanel from "@/components/RiskPlannerPanel.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -16,6 +17,8 @@ const batch = ref<any>(null);
 const projects = ref<Project[]>([]);
 const adjustmentVisible = ref(false);
 const colorVisible = ref(false);
+const openedVisible = ref(false);
+const openedDate = ref("");
 const adjustment = reactive({ direction: "OUT", quantity: "", unit: "", reason: "" });
 const colorForm = reactive({ projectId: "", changeType: "OTHER", afterColorName: "", afterColorHex: "", affectedQuantity: "", unit: "", occurredAt: localDateTimeValue(), environmentNotes: "", notes: "" });
 
@@ -30,6 +33,7 @@ async function load() {
     projects.value = projectResponse.data.filter((project) => ["PLANNED", "IN_PROGRESS", "COMPLETED"].includes(project.status));
     adjustment.unit = response.data.stockUnit;
     colorForm.unit = response.data.stockUnit;
+    openedDate.value = response.data.openedAt || localDateValue();
   } catch (error) {
     ElMessage.error(error instanceof ApiError ? error.message : "批次加载失败");
   } finally {
@@ -118,6 +122,27 @@ async function submitColor() {
   }
 }
 
+async function submitOpened() {
+  if (!openedDate.value) {
+    ElMessage.error("请选择开封日");
+    return;
+  }
+  saving.value = true;
+  try {
+    await request(`/batches/${batch.value.id}`, {
+      method: "PATCH",
+      body: { openedAt: openedDate.value, version: batch.value.version }
+    });
+    ElMessage.success("开封日已更新，效期规划将自动重算");
+    openedVisible.value = false;
+    await load();
+  } catch (error) {
+    ElMessage.error(error instanceof ApiError ? error.message : "开封日更新失败");
+  } finally {
+    saving.value = false;
+  }
+}
+
 async function archive() {
   try {
     await ElMessageBox.confirm("只有余额为 0 的批次可以归档，历史流水会保留。", "归档批次", { type: "warning" });
@@ -156,6 +181,13 @@ onMounted(load);
         <el-descriptions :column="3" border>
           <el-descriptions-item label="材料"><router-link :to="`/materials/${batch.materialId}`">{{ batch.materialName }}</router-link></el-descriptions-item>
           <el-descriptions-item label="入库日期">{{ batch.receivedAt }}</el-descriptions-item>
+          <el-descriptions-item label="开封日">
+            {{ batch.openedAt || "未开封/未记录" }}
+            <span v-if="batch.openShelfLifeDays" class="muted">（建议 {{ batch.openShelfLifeDays }} 天内用完）</span>
+            <el-button v-if="batch.status !== 'ARCHIVED'" link type="primary" size="small" style="margin-left:8px" @click="openedVisible = true">
+              {{ batch.openedAt ? "修正" : "补录" }}
+            </el-button>
+          </el-descriptions-item>
           <el-descriptions-item label="有效期">{{ batch.expiryAt || "无" }}</el-descriptions-item>
           <el-descriptions-item label="存放位置">{{ batch.locationName || "未指定" }}</el-descriptions-item>
           <el-descriptions-item label="成本">{{ batch.totalCost ? `${batch.totalCost} ${batch.currency || ""}` : "未记录" }}</el-descriptions-item>
@@ -163,6 +195,8 @@ onMounted(load);
           <el-descriptions-item label="备注" :span="3">{{ batch.notes || "无" }}</el-descriptions-item>
         </el-descriptions>
       </section>
+
+      <RiskPlannerPanel :batch-id="batch.id" style="margin-top:16px" />
 
       <AttachmentPanel owner-type="BATCH" :owner-id="batch.id" :attachments="batch.attachments" @changed="load" />
 
@@ -189,6 +223,18 @@ onMounted(load);
         </section>
       </div>
     </template>
+
+    <el-dialog v-model="openedVisible" title="开封日" width="420px">
+      <el-alert
+        :title="batch?.openShelfLifeDays ? `该材料开封后建议 ${batch.openShelfLifeDays} 天内用完，规划器将按开封日重算开封效期。` : '该材料未配置开封后建议使用天数，请先在材料档案中补全。'"
+        type="info" show-icon :closable="false" style="margin-bottom:16px"
+      />
+      <el-date-picker v-model="openedDate" type="date" value-format="YYYY-MM-DD" style="width:100%" />
+      <template #footer>
+        <el-button @click="openedVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="submitOpened">保存</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="adjustmentVisible" title="库存调整" width="520px">
       <el-form label-position="top">

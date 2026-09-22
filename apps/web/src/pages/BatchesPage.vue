@@ -68,7 +68,13 @@ onMounted(() => {
         <el-table-column label="剩余/初始" width="180"><template #default="{ row }"><span class="amount">{{ row.remainingQuantity }} / {{ row.initialQuantity }} {{ row.stockUnit }}</span></template></el-table-column>
         <el-table-column label="当前颜色" width="150"><template #default="{ row }"><span v-if="row.currentColorHex" class="color-dot" :style="{ background: row.currentColorHex }" />{{ row.currentColorName || "未记录" }}</template></el-table-column>
         <el-table-column label="存放位置" min-width="130"><template #default="{ row }">{{ row.locationName || "未指定" }}</template></el-table-column>
-        <el-table-column label="入库/到期" width="160"><template #default="{ row }">{{ row.receivedAt }}<div class="muted">{{ row.expiryAt || "无有效期" }}</div></template></el-table-column>
+        <el-table-column label="入库/开封/到期" width="190">
+          <template #default="{ row }">
+            {{ row.receivedAt }}
+            <div class="muted">开封：{{ row.openedAt || "未记录" }}</div>
+            <div class="muted">到期：{{ row.expiryAt || "无" }}</div>
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="row.status === 'ACTIVE' ? 'success' : row.status === 'ARCHIVED' ? 'info' : 'warning'">{{ statusLabels[row.status] || row.status }}</el-tag></template></el-table-column>
         <el-table-column label="操作" width="110" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="router.push(`/batches/${row.id}`)">查看与操作</el-button></template></el-table-column>
       </el-table>

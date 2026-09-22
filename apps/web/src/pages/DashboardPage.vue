@@ -12,9 +12,16 @@ type Dashboard = {
     consumptionCountThisMonth: number;
   };
   lowStock: Array<{ id: string; name: string; remainingQuantity: string; stockUnit: string; lowStockThreshold: string }>;
-  expiring: Array<{ id: string; materialName: string; batchCode: string | null; expiryAt: string; remainingQuantity: string; stockUnit: string; daysRemaining: number }>;
+  expiring: Array<{ id: string; materialName: string; batchCode: string | null; expiryAt: string | null; bindingDeadline: string; remainingQuantity: string; stockUnit: string; daysRemaining: number }>;
   recentMovements: Array<{ id: string; type: string; signedQuantity: string; stockUnit: string; afterQuantity: string; createdAt: string; batchId: string; materialName: string; batchCode: string | null }>;
   activeProjects: Array<{ id: string; name: string; craftType: string; status: string; dueDate: string | null; requirementCount: number; consumptionCount: number }>;
+  riskSummary: {
+    asOf: string;
+    lookbackDays: number;
+    total: number;
+    byRiskLevel: Record<string, number>;
+    exemptCount: number;
+  };
   generatedAt: string;
 };
 
@@ -55,6 +62,23 @@ onMounted(load);
         <article class="stat-card"><small>进行中项目</small><strong>{{ data.summary.activeProjectCount }}</strong></article>
         <article class="stat-card"><small>已耗尽批次</small><strong>{{ data.summary.depletedBatchCount }}</strong></article>
         <article class="stat-card"><small>本月消耗笔数</small><strong>{{ data.summary.consumptionCountThisMonth }}</strong></article>
+      </section>
+
+      <section class="panel" style="margin-top:16px">
+        <div class="risk-bar">
+          <h2 style="margin:0">效期风险概览</h2>
+          <router-link to="/risk-plans" class="risk-link">打开效期风险规划 →</router-link>
+        </div>
+        <div class="risk-tags">
+          <el-tag type="danger" size="large">严重 {{ data.riskSummary.byRiskLevel.CRITICAL ?? 0 }}</el-tag>
+          <el-tag type="warning" size="large">高 {{ data.riskSummary.byRiskLevel.HIGH ?? 0 }}</el-tag>
+          <el-tag type="primary" size="large">中 {{ data.riskSummary.byRiskLevel.MEDIUM ?? 0 }}</el-tag>
+          <el-tag type="success" size="large">低 {{ data.riskSummary.byRiskLevel.LOW ?? 0 }}</el-tag>
+          <el-tag type="info" size="large">豁免保留 {{ data.riskSummary.exemptCount ?? 0 }}</el-tag>
+          <span class="muted" style="font-size:12px">
+            共 {{ data.riskSummary.total }} 个在库批次 · 按剩余量、开封日和近 {{ data.riskSummary.lookbackDays }} 天使用速率重算（基准日 {{ data.riskSummary.asOf }}）
+          </span>
+        </div>
       </section>
 
       <div class="two-column" style="margin-top: 16px">
@@ -101,11 +125,16 @@ onMounted(load);
           <el-empty v-else description="暂无进行中的项目" />
         </section>
         <section class="panel">
-          <h2>已过期或 30 天内到期</h2>
+          <h2>已过期或 30 天内到期（含开封后效期）</h2>
           <el-table v-if="data.expiring.length" :data="data.expiring" size="small">
             <el-table-column label="材料" prop="materialName" />
             <el-table-column label="批次" prop="batchCode" />
-            <el-table-column label="到期" prop="expiryAt" width="110" />
+            <el-table-column label="约束到期" width="120">
+              <template #default="{ row }">
+                <strong :class="row.daysRemaining < 0 ? 'danger-text' : ''">{{ row.bindingDeadline }}</strong>
+                <div class="muted">{{ row.daysRemaining < 0 ? `已过期 ${-row.daysRemaining} 天` : `剩 ${row.daysRemaining} 天` }}</div>
+              </template>
+            </el-table-column>
           </el-table>
           <el-empty v-else description="暂无临期批次" />
         </section>
@@ -114,3 +143,24 @@ onMounted(load);
     </template>
   </div>
 </template>
+
+<style scoped>
+.risk-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.risk-link {
+  font-size: 13px;
+}
+.risk-tags {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.danger-text {
+  color: var(--el-color-danger);
+}
+</style>

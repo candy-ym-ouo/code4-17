@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { planBatchRisk, summarizePlans, type PlannerBatchInput } from "@handcraft/contracts";
 import { pool } from "../lib/db.js";
 import { pageMeta, parsePagination } from "../lib/pagination.js";
 
@@ -24,7 +25,7 @@ function toCsv(rows: Record<string, unknown>[]): string {
 
 export async function insightRoutes(app: FastifyInstance): Promise<void> {
   app.get("/dashboard", async () => {
-    const [summary, lowStock, expiring, movements, projects] = await Promise.all([
+    const [summary, lowStock, expiring, movements, projects, riskInputs] = await Promise.all([
       pool.query(
         `SELECT
           (SELECT count(*)::int FROM materials WHERE archived_at IS NULL) AS "materialCount",
@@ -44,12 +45,31 @@ export async function insightRoutes(app: FastifyInstance): Promise<void> {
       ),
       pool.query(
         `SELECT b.id, b.batch_code AS "batchCode", m.name AS "materialName", b.expiry_at AS "expiryAt",
+                b.opened_at AS "openedAt", m.open_shelf_life_days AS "openShelfLifeDays",
                 b.remaining_quantity::text AS "remainingQuantity", b.stock_unit AS "stockUnit",
-                (b.expiry_at - current_date) AS "daysRemaining"
+                least(
+                  b.expiry_at,
+                  CASE WHEN b.opened_at IS NOT NULL AND m.open_shelf_life_days IS NOT NULL
+                       THEN b.opened_at + m.open_shelf_life_days END
+                ) AS "bindingDeadline",
+                (least(
+                  b.expiry_at,
+                  CASE WHEN b.opened_at IS NOT NULL AND m.open_shelf_life_days IS NOT NULL
+                       THEN b.opened_at + m.open_shelf_life_days END
+                ) - current_date) AS "daysRemaining"
            FROM batches b JOIN materials m ON m.id = b.material_id
-          WHERE b.status = 'ACTIVE' AND b.remaining_quantity > 0 AND b.expiry_at IS NOT NULL
-            AND b.expiry_at <= current_date + 30
-          ORDER BY b.expiry_at ASC LIMIT 20`
+          WHERE b.status = 'ACTIVE' AND b.remaining_quantity > 0
+            AND least(
+                  b.expiry_at,
+                  CASE WHEN b.opened_at IS NOT NULL AND m.open_shelf_life_days IS NOT NULL
+                       THEN b.opened_at + m.open_shelf_life_days END
+                ) IS NOT NULL
+            AND least(
+                  b.expiry_at,
+                  CASE WHEN b.opened_at IS NOT NULL AND m.open_shelf_life_days IS NOT NULL
+                       THEN b.opened_at + m.open_shelf_life_days END
+                ) <= current_date + 30
+          ORDER BY "bindingDeadline" ASC LIMIT 20`
       ),
       pool.query(
         `SELECT sm.id, sm.type, sm.signed_quantity::text AS "signedQuantity", sm.stock_unit AS "stockUnit",
@@ -65,8 +85,73 @@ export async function insightRoutes(app: FastifyInstance): Promise<void> {
            FROM projects p
           WHERE p.status IN ('PLANNED', 'IN_PROGRESS') AND p.archived_at IS NULL
           ORDER BY CASE p.status WHEN 'IN_PROGRESS' THEN 0 ELSE 1 END, p.due_date ASC NULLS LAST LIMIT 10`
+      ),
+      pool.query(
+        `WITH params AS (SELECT current_date::text AS as_of, 30 AS lookback_days),
+        active_batches AS (
+          SELECT b.id, b.remaining_quantity::text AS remaining_quantity, b.stock_unit,
+                 b.expiry_at::text AS expiry_at, b.opened_at::text AS opened_at,
+                 m.open_shelf_life_days
+            FROM batches b JOIN materials m ON m.id = b.material_id, params
+           WHERE b.status = 'ACTIVE' AND b.remaining_quantity > 0
+        ),
+        consumption_windows AS (
+          SELECT c.batch_id, c.consumed_at::text AS consumed_at, c.total_quantity::text AS total_quantity
+            FROM consumptions c, params
+           WHERE c.status = 'ACTIVE'
+             AND c.consumed_at > params.as_of::date - params.lookback_days * INTERVAL '1 day'
+             AND c.consumed_at < (params.as_of::date + 1)
+        ),
+        latest_grants AS (
+          SELECT DISTINCT ON (e.batch_id)
+                 e.id, e.batch_id, e.reason, e.valid_from::text AS valid_from,
+                 e.valid_until::text AS valid_until, e.created_at::text AS created_at,
+                 (e.valid_from <= current_date AND e.valid_until >= current_date AND r.id IS NULL) AS is_active,
+                 r.created_at::text AS revoked_at, r.reason AS revoked_reason
+            FROM batch_exemptions e
+            LEFT JOIN batch_exemptions r ON r.grant_id = e.id AND r.action = 'REVOKE'
+           WHERE e.action = 'GRANT'
+           ORDER BY e.batch_id,
+                    (e.valid_from <= current_date AND e.valid_until >= current_date AND r.id IS NULL) DESC,
+                    e.created_at DESC, e.id DESC
+        )
+        SELECT ab.*,
+               coalesce((SELECT jsonb_agg(jsonb_build_object('consumedAt', cw.consumed_at, 'totalQuantity', cw.total_quantity))
+                           FROM consumption_windows cw WHERE cw.batch_id = ab.id), '[]'::jsonb) AS consumptions,
+               to_jsonb(lg) AS exemption
+          FROM active_batches ab LEFT JOIN latest_grants lg ON lg.batch_id = ab.id`
       )
     ]);
+    const asOf = new Date().toISOString().slice(0, 10);
+    const riskPlans = riskInputs.rows.map((row: Record<string, unknown>) => {
+      const consumptions = Array.isArray(row.consumptions)
+        ? (row.consumptions as Array<{ consumedAt: string; totalQuantity: string }>)
+        : [];
+      const exemptionRow = row.exemption as Record<string, unknown> | null;
+      const latestExemption = exemptionRow
+        ? {
+            id: String(exemptionRow.id),
+            reason: String(exemptionRow.reason),
+            validFrom: String(exemptionRow.valid_from),
+            validUntil: String(exemptionRow.valid_until),
+            status: (exemptionRow.is_active ? "ACTIVE" : exemptionRow.revoked_at ? "REVOKED" : "EXPIRED") as "ACTIVE" | "EXPIRED" | "REVOKED",
+            revokedReason: (exemptionRow.revoked_reason as string | null) ?? null,
+            revokedAt: (exemptionRow.revoked_at as string | null) ?? null,
+            createdAt: String(exemptionRow.created_at)
+          }
+        : null;
+      const input: PlannerBatchInput = {
+        id: String(row.id),
+        remainingQuantity: String(row.remaining_quantity),
+        stockUnit: String(row.stock_unit),
+        expiryAt: (row.expiry_at as string | null) ?? null,
+        openedAt: (row.opened_at as string | null) ?? null,
+        openShelfLifeDays: (row.open_shelf_life_days as number | null) ?? null,
+        consumptions,
+        latestExemption
+      };
+      return planBatchRisk(input, { asOf, lookbackDays: 30 });
+    });
     return {
       data: {
         summary: summary.rows[0],
@@ -74,6 +159,7 @@ export async function insightRoutes(app: FastifyInstance): Promise<void> {
         expiring: expiring.rows,
         recentMovements: movements.rows,
         activeProjects: projects.rows,
+        riskSummary: { asOf, lookbackDays: 30, ...summarizePlans(riskPlans) },
         generatedAt: new Date().toISOString()
       }
     };
@@ -123,7 +209,8 @@ export async function insightRoutes(app: FastifyInstance): Promise<void> {
   app.get("/exports/batches.csv", async (_request, reply) => {
     const result = await pool.query<Record<string, unknown>>(
       `SELECT m.name AS material_name, b.batch_code, s.name AS source_name, l.name AS location_name,
-              b.received_at, b.expiry_at, b.initial_quantity, b.remaining_quantity, b.stock_unit,
+              b.received_at, b.opened_at, b.expiry_at, m.open_shelf_life_days AS open_shelf_life_days,
+              b.initial_quantity, b.remaining_quantity, b.stock_unit,
               b.current_color_name, b.current_color_hex, b.status, b.notes, b.created_at, b.updated_at
          FROM batches b JOIN materials m ON m.id = b.material_id
          LEFT JOIN sources s ON s.id = b.source_id LEFT JOIN storage_locations l ON l.id = b.location_id

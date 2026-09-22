@@ -1,4 +1,13 @@
 import { z } from "zod";
+import {
+  DEFAULT_LOOKBACK_DAYS,
+  MAX_LOOKBACK_DAYS,
+  MAX_OPEN_SHELF_LIFE_DAYS,
+  MIN_LOOKBACK_DAYS,
+  RISK_LEVELS
+} from "./riskPlanner.js";
+
+export * from "./riskPlanner.js";
 
 export const craftTypes = ["DYEING", "WOODWORKING", "POTTERY", "METALWORKING", "GENERAL", "OTHER"] as const;
 export type CraftType = (typeof craftTypes)[number];
@@ -147,6 +156,7 @@ export const materialInputSchema = z.object({
   subtype: z.string().trim().max(80).nullable().optional(),
   stockUnit: z.enum(stockUnits),
   lowStockThreshold: decimalQuantity.nullable().optional(),
+  openShelfLifeDays: z.number().int().min(1).max(MAX_OPEN_SHELF_LIFE_DAYS).nullable().optional(),
   defaultColorName: z.string().trim().max(80).nullable().optional(),
   defaultColorHex: z.union([colorHex, z.literal("")]).nullable().optional(),
   tags: z.array(z.string().trim().min(1).max(40)).max(30).default([]),
@@ -161,6 +171,7 @@ export const batchCreateSchema = z.object({
   locationId: z.string().uuid().nullable().optional(),
   receivedAt: z.string().date(),
   expiryAt: z.string().date().nullable().optional(),
+  openedAt: z.string().date().nullable().optional(),
   initialQuantity: positiveQuantity,
   entryUnit: z.enum(stockUnits),
   totalCost: moneyAmount.nullable().optional(),
@@ -174,6 +185,7 @@ export const batchPatchSchema = z.object({
   version: z.number().int().positive(),
   locationId: z.string().uuid().nullable().optional(),
   expiryAt: z.string().date().nullable().optional(),
+  openedAt: z.string().date().nullable().optional(),
   notes: z.string().trim().max(5000).nullable().optional()
 });
 
@@ -252,6 +264,24 @@ export const projectStatusSchema = z.object({
   status: z.enum(projectStatuses),
   version: z.number().int().positive()
 });
+
+export const riskPlannerQuerySchema = z.object({
+  asOf: z.string().date().optional(),
+  lookbackDays: z.coerce.number().int().min(MIN_LOOKBACK_DAYS).max(MAX_LOOKBACK_DAYS).optional(),
+  riskLevel: z.enum(RISK_LEVELS).optional()
+});
+
+export const exemptionCreateSchema = z.object({
+  reason: z.string().trim().min(3, "豁免原因至少 3 个字").max(1000),
+  validUntil: z.string().date(),
+  note: z.string().trim().max(2000).nullable().optional()
+});
+
+export const exemptionRevokeSchema = z.object({
+  reason: z.string().trim().min(3, "撤销原因至少 3 个字").max(1000)
+});
+
+export { DEFAULT_LOOKBACK_DAYS };
 
 export type Pagination = {
   page: number;

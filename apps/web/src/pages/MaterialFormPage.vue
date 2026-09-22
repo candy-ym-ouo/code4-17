@@ -17,6 +17,7 @@ const form = reactive({
   subtype: "",
   stockUnit: "g",
   lowStockThreshold: "",
+  openShelfLifeDays: "" as string | number,
   defaultColorName: "",
   defaultColorHex: "",
   tagsText: "",
@@ -35,6 +36,7 @@ async function load() {
       subtype: m.subtype || "",
       stockUnit: m.stockUnit,
       lowStockThreshold: m.lowStockThreshold || "",
+      openShelfLifeDays: m.openShelfLifeDays ?? "",
       defaultColorName: m.defaultColorName || "",
       defaultColorHex: m.defaultColorHex || "",
       tagsText: m.tags?.join("，") || "",
@@ -51,6 +53,11 @@ async function submit() {
     ElMessage.error("请填写材料名称并至少选择一种工艺");
     return;
   }
+  const openShelfLifeDays = form.openShelfLifeDays === "" ? null : Number(form.openShelfLifeDays);
+  if (openShelfLifeDays !== null && (!Number.isInteger(openShelfLifeDays) || openShelfLifeDays < 1 || openShelfLifeDays > 3650)) {
+    ElMessage.error("开封后建议使用天数必须是 1 到 3650 之间的整数");
+    return;
+  }
   saving.value = true;
   try {
     const body = {
@@ -60,6 +67,7 @@ async function submit() {
       subtype: form.subtype || null,
       stockUnit: form.stockUnit,
       lowStockThreshold: form.lowStockThreshold || null,
+      openShelfLifeDays,
       defaultColorName: form.defaultColorName || null,
       defaultColorHex: form.defaultColorHex || null,
       tags: form.tagsText.split(/[,，]/).map((item) => item.trim()).filter(Boolean),
@@ -105,6 +113,10 @@ onMounted(load);
             </el-select>
           </el-form-item>
           <el-form-item label="低库存阈值"><el-input v-model="form.lowStockThreshold" placeholder="留空表示不预警，例如 200" /></el-form-item>
+          <el-form-item label="开封后建议使用天数">
+            <el-input-number v-model="form.openShelfLifeDays" :min="1" :max="3650" controls-position="right" style="width:100%" placeholder="留空表示不限" />
+            <div class="muted">批次开封后，规划器将按“开封日 + 天数”计算开封效期</div>
+          </el-form-item>
           <el-form-item label="默认颜色名称"><el-input v-model="form.defaultColorName" maxlength="80" /></el-form-item>
           <el-form-item label="默认颜色值">
             <div style="display:flex; gap:10px; width:100%"><el-color-picker v-model="form.defaultColorHex" /><el-input v-model="form.defaultColorHex" placeholder="#RRGGBB" /></div>

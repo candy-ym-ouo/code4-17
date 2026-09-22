@@ -92,6 +92,7 @@ export async function materialRoutes(app: FastifyInstance): Promise<void> {
       ), rows AS (
         SELECT m.id, m.code, m.name, m.craft_types AS "craftTypes", m.subtype,
                m.stock_unit AS "stockUnit", m.low_stock_threshold::text AS "lowStockThreshold",
+               m.open_shelf_life_days AS "openShelfLifeDays",
                m.default_color_name AS "defaultColorName", m.default_color_hex AS "defaultColorHex",
                m.tags, m.notes, m.archived_at AS "archivedAt", m.created_at AS "createdAt",
                m.updated_at AS "updatedAt", m.version,
@@ -140,7 +141,9 @@ export async function materialRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>("/materials/:id", async (request) => {
     const material = await pool.query(
       `SELECT m.id, m.code, m.name, m.craft_types AS "craftTypes", m.subtype, m.stock_unit AS "stockUnit",
-              m.low_stock_threshold::text AS "lowStockThreshold", m.default_color_name AS "defaultColorName",
+              m.low_stock_threshold::text AS "lowStockThreshold",
+              m.open_shelf_life_days AS "openShelfLifeDays",
+              m.default_color_name AS "defaultColorName",
               m.default_color_hex AS "defaultColorHex", m.tags, m.notes, m.archived_at AS "archivedAt",
               m.created_at AS "createdAt", m.updated_at AS "updatedAt", m.version,
               coalesce(sum(b.remaining_quantity) FILTER (WHERE b.status <> 'ARCHIVED'), 0)::text AS "remainingQuantity",
@@ -168,12 +171,13 @@ export async function materialRoutes(app: FastifyInstance): Promise<void> {
     const user = (request as AuthenticatedRequest).authUser;
     const created = await withTransaction(async (client) => {
       const result = await client.query(
-        `INSERT INTO materials(code, name, craft_types, subtype, stock_unit, low_stock_threshold,
+        `INSERT INTO materials(code, name, craft_types, subtype, stock_unit, low_stock_threshold, open_shelf_life_days,
           default_color_name, default_color_hex, tags, notes)
-         VALUES ($1, $2, $3::craft_type[], $4, $5::stock_unit, $6, $7, $8, $9::text[], $10)
+         VALUES ($1, $2, $3::craft_type[], $4, $5::stock_unit, $6, $7, $8, $9, $10::text[], $11)
          RETURNING *`,
         [input.code || null, input.name, input.craftTypes, input.subtype || null, input.stockUnit,
-         input.lowStockThreshold ?? null, input.defaultColorName || null, input.defaultColorHex || null, input.tags, input.notes || null]
+         input.lowStockThreshold ?? null, input.openShelfLifeDays ?? null,
+         input.defaultColorName || null, input.defaultColorHex || null, input.tags, input.notes || null]
       );
       await writeAudit(client, { actorUserId: user.id, action: "CREATE", entityType: "MATERIAL", entityId: result.rows[0]?.id, afterData: result.rows[0], requestId: request.id });
       return result.rows[0];
@@ -212,6 +216,7 @@ export async function materialRoutes(app: FastifyInstance): Promise<void> {
           default_color_hex = CASE WHEN $12::boolean THEN $13 ELSE default_color_hex END,
           tags = coalesce($14::text[], tags),
           notes = CASE WHEN $15::boolean THEN $16 ELSE notes END,
+          open_shelf_life_days = CASE WHEN $18::boolean THEN $19 ELSE open_shelf_life_days END,
           version = version + 1
          WHERE id = $17 RETURNING *`,
         [
@@ -220,7 +225,8 @@ export async function materialRoutes(app: FastifyInstance): Promise<void> {
           "lowStockThreshold" in input, input.lowStockThreshold ?? null,
           "defaultColorName" in input, input.defaultColorName || null,
           "defaultColorHex" in input, input.defaultColorHex || null,
-          input.tags ?? null, "notes" in input, input.notes || null, request.params.id
+          input.tags ?? null, "notes" in input, input.notes || null, request.params.id,
+          "openShelfLifeDays" in input, input.openShelfLifeDays ?? null
         ]
       );
       await writeAudit(client, { actorUserId: user.id, action: "UPDATE", entityType: "MATERIAL", entityId: request.params.id, beforeData: old, afterData: result.rows[0], requestId: request.id });

@@ -79,7 +79,9 @@ export async function batchRoutes(app: FastifyInstance): Promise<void> {
       `SELECT b.id, b.material_id AS "materialId", m.name AS "materialName", m.code AS "materialCode",
               m.craft_types AS "craftTypes", b.batch_code AS "batchCode", b.source_id AS "sourceId", s.name AS "sourceName",
               b.location_id AS "locationId", l.name AS "locationName", b.received_at AS "receivedAt",
-              b.expiry_at AS "expiryAt", b.initial_quantity::text AS "initialQuantity",
+              b.expiry_at AS "expiryAt", b.opened_at AS "openedAt",
+              m.open_shelf_life_days AS "openShelfLifeDays",
+              b.initial_quantity::text AS "initialQuantity",
               b.remaining_quantity::text AS "remainingQuantity", b.stock_unit AS "stockUnit", b.entry_unit AS "entryUnit",
               b.current_color_name AS "currentColorName", b.current_color_hex AS "currentColorHex", b.status,
               b.notes, b.created_at AS "createdAt", b.updated_at AS "updatedAt", b.version
@@ -94,7 +96,9 @@ export async function batchRoutes(app: FastifyInstance): Promise<void> {
       `SELECT b.id, b.material_id AS "materialId", m.name AS "materialName", m.code AS "materialCode",
               m.craft_types AS "craftTypes", b.batch_code AS "batchCode", b.source_id AS "sourceId", s.name AS "sourceName",
               b.source_note AS "sourceNote", b.location_id AS "locationId", l.name AS "locationName",
-              b.received_at AS "receivedAt", b.expiry_at AS "expiryAt", b.initial_quantity::text AS "initialQuantity",
+              b.received_at AS "receivedAt", b.expiry_at AS "expiryAt", b.opened_at AS "openedAt",
+              m.open_shelf_life_days AS "openShelfLifeDays",
+              b.initial_quantity::text AS "initialQuantity",
               b.remaining_quantity::text AS "remainingQuantity", b.stock_unit AS "stockUnit", b.entry_unit AS "entryUnit",
               b.total_cost::text AS "totalCost", b.currency, b.initial_color_name AS "initialColorName",
               b.initial_color_hex AS "initialColorHex", b.current_color_name AS "currentColorName",
@@ -134,6 +138,12 @@ export async function batchRoutes(app: FastifyInstance): Promise<void> {
     const input = parseInput(batchCreateSchema, request.body);
     if (input.expiryAt && input.expiryAt < input.receivedAt) {
       throw new AppError(422, "INVALID_EXPIRY_DATE", "有效期不能早于入库日期");
+    }
+    if (input.openedAt && input.openedAt < input.receivedAt) {
+      throw new AppError(422, "INVALID_OPENED_DATE", "开封日不能早于入库日期");
+    }
+    if (input.openedAt && input.expiryAt && input.openedAt > input.expiryAt) {
+      throw new AppError(422, "INVALID_OPENED_DATE", "开封日不能晚于有效期");
     }
     const user = (request as AuthenticatedRequest).authUser;
     const idempotencyKey = getIdempotencyKey(request.headers);
@@ -176,14 +186,16 @@ export async function batchRoutes(app: FastifyInstance): Promise<void> {
       const initialColorHex = input.initialColorHex || material.default_color_hex;
       const batch = await client.query(
         `INSERT INTO batches(material_id, batch_code, source_id, source_note, location_id, received_at, expiry_at,
-          initial_quantity, remaining_quantity, stock_unit, entry_unit, total_cost, currency,
+          opened_at, initial_quantity, remaining_quantity, stock_unit, entry_unit, total_cost, currency,
           initial_color_name, initial_color_hex, current_color_name, current_color_hex, color_updated_at, notes)
-         VALUES ($1, $2, $3, $4, $5, $6::date, $7::date, $8, $8, $9::stock_unit, $10::stock_unit, $11, $12,
-                 $13::varchar(80), $14::char(7), $13::varchar(80), $14::char(7), CASE WHEN $13 IS NULL AND $14 IS NULL THEN NULL ELSE now() END, $15)
+         VALUES ($1, $2, $3, $4, $5, $6::date, $7::date,
+          $8::date, $9, $9, $10::stock_unit, $11::stock_unit, $12, $13,
+                 $14::varchar(80), $15::char(7), $14::varchar(80), $15::char(7), CASE WHEN $14 IS NULL AND $15 IS NULL THEN NULL ELSE now() END, $16)
          RETURNING *`,
         [
           input.materialId, input.batchCode || null, input.sourceId || null, input.sourceNote || null,
-          input.locationId || null, input.receivedAt, input.expiryAt || null, normalizedQuantity,
+          input.locationId || null, input.receivedAt, input.expiryAt || null, input.openedAt || null,
+          normalizedQuantity,
           material.stock_unit, input.entryUnit, input.totalCost ?? null, input.currency || null,
           initialColorName, initialColorHex, input.notes || null
         ]
@@ -226,14 +238,26 @@ export async function batchRoutes(app: FastifyInstance): Promise<void> {
         );
         if (!validExpiry.rows[0]?.valid) throw new AppError(422, "INVALID_EXPIRY_DATE", "有效期不能早于入库日期");
       }
+      if ("openedAt" in input && input.openedAt) {
+        const validOpened = await client.query<{ afterReceived: boolean; beforeExpiry: boolean }>(
+          `SELECT $1::date >= received_at AS "afterReceived",
+                  (expiry_at IS NULL OR $1::date <= expiry_at) AS "beforeExpiry"
+             FROM batches WHERE id = $2`,
+          [input.openedAt, request.params.id]
+        );
+        if (!validOpened.rows[0]?.afterReceived) throw new AppError(422, "INVALID_OPENED_DATE", "开封日不能早于入库日期");
+        if (!validOpened.rows[0]?.beforeExpiry) throw new AppError(422, "INVALID_OPENED_DATE", "开封日不能晚于有效期");
+      }
       const result = await client.query(
         `UPDATE batches SET
           location_id = CASE WHEN $1::boolean THEN $2 ELSE location_id END,
           expiry_at = CASE WHEN $3::boolean THEN $4::date ELSE expiry_at END,
           notes = CASE WHEN $5::boolean THEN $6 ELSE notes END,
+          opened_at = CASE WHEN $8::boolean THEN $9::date ELSE opened_at END,
           version = version + 1
          WHERE id = $7 RETURNING *`,
-        ["locationId" in input, input.locationId || null, "expiryAt" in input, input.expiryAt || null, "notes" in input, input.notes || null, request.params.id]
+        ["locationId" in input, input.locationId || null, "expiryAt" in input, input.expiryAt || null, "notes" in input, input.notes || null, request.params.id,
+         "openedAt" in input, input.openedAt || null]
       );
       await writeAudit(client, { actorUserId: user.id, action: "UPDATE", entityType: "BATCH", entityId: request.params.id, beforeData: old, afterData: result.rows[0], requestId: request.id });
       return { data: result.rows[0] };
