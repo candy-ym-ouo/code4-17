@@ -11,6 +11,7 @@ coverage/
 # Runtime data
 uploads/
 backups/
+expiry-planner.json
 *.log
 pnpm-debug.log*
 

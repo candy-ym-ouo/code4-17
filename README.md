@@ -38,7 +38,8 @@ origin/
 │   ├── api/                 Node.js API、SQL migrations、测试
 │   └── web/                 Vue 3 前端
 ├── packages/
-│   └── contracts/           前后端共享枚举、校验和单位换算
+│   ├── contracts/           前后端共享枚举、校验和单位换算
+│   └── expiry-planner/      材料效期风险规划器（剩余量/开封日/速率、处置建议、豁免原因链）
 ├── ops/
 │   ├── healthcheck.sh
 │   └── smoke-test.mjs

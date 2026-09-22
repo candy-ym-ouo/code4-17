@@ -1,0 +1,20 @@
+{
+  "batchId": "b-2026-0901-indigo",
+  "materialCode": "DYE-INDIGO",
+  "materialName": "靛蓝染液",
+  "batchCode": "IND-2026-09",
+  "unit": "ml",
+  "status": "ACTIVE",
+  "remainingQuantity": "1000",
+  "receivedOn": "2026-07-01",
+  "expiryOn": "2026-10-31",
+  "openedOn": "2026-08-01",
+  "openedShelfDays": 60,
+  "consumptionSamples": [
+    { "consumedOn": "2026-08-25", "quantity": "50" },
+    { "consumedOn": "2026-09-10", "quantity": "50" }
+  ],
+  "usageRatePerDay": null,
+  "lowStockThreshold": "200",
+  "reorderLeadDays": 7
+}
